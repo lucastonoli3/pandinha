@@ -34,7 +34,8 @@ import {
   ShoppingCart,
   Lightbulb,
   LightbulbOff,
-  Check
+  Check,
+  Image as ImageIcon
 } from 'lucide-react';
 
 // --- CONFIGURAÇÃO E DADOS ---
@@ -137,12 +138,25 @@ const MOTIVATION_QUOTES = [
 ];
 
 // --- SERVIÇO GEMINI AI ---
-const callGemini = async (prompt, systemInstruction) => {
-  const apiKey = "AIzaSyBYbLrXpbpx7V0yBcM8uQypeUhUoJvoMzg"; // A chave será injetada automaticamente pelo ambiente
+// MODIFICADO: Agora aceita imagemBase64!
+const callGemini = async (prompt, systemInstruction, imageBase64 = null) => {
+  const apiKey = "AIzaSyBYbLrXpbpx7V0yBcM8uQypeUhUoJvoMzg"; // ⚠️ COLOQUE SUA API KEY AQUI PARA A NUTRI VER A FOTO!
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
   
+  let userParts = [{ text: prompt }];
+  
+  // Se tiver imagem, adiciona no payload
+  if (imageBase64) {
+    userParts.push({
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: imageBase64
+      }
+    });
+  }
+
   const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
+    contents: [{ role: "user", parts: userParts }],
     systemInstruction: { parts: [{ text: systemInstruction }] }
   };
 
@@ -163,10 +177,13 @@ const callGemini = async (prompt, systemInstruction) => {
 const NUTRI_SYSTEM_PROMPT = `
 Você é a "Nutri da Raylany". Sua personalidade é uma mistura de "Tia da Merenda" carinhosa com "Sargento Fitness".
 O nome da sua paciente é Raylany Subtil. Ela ama pandas e músicas dos anos 2000.
-SEU OBJETIVO: Ajudar Raylany a emagrecer com receitas BARATAS e ACESSÍVEIS (Brasil, classe média/baixa). Nada de "berries", "avocado" ou coisas caras. Use ovo, frango, batata doce, cuscuz, aveia.
+SEU OBJETIVO: Ajudar Raylany a emagrecer com receitas BARATAS e ACESSÍVEIS.
 ESTILO DE FALA: Use gírias leves, seja engraçada, mas dê bronca se ela falar que comeu besteira. Use emojis.
-CONTEXTO: Ela está num app gamificado onde o avatar é um Panda que engorda ou emagrece.
-Se ela mandar uma foto (simbolicamente), elogie ou critique o prato.
+SE RECEBER UMA FOTO: Analise a imagem com cuidado.
+- Se for comida saudável: Elogie muito!
+- Se for "gordice" (pizza, doce, fritura): Dê uma bronca engraçada!
+- Se for foto dela (corpo): Motive e diga que o Panda tá ficando fit.
+- Se não for nada disso: Faça uma piada.
 `;
 
 const RECIPE_SYSTEM_PROMPT = `
@@ -263,6 +280,9 @@ export default function App() {
   // Screen Wake Lock State
   const [isScreenLockActive, setIsScreenLockActive] = useState(false);
   const wakeLockRef = useRef(null);
+  
+  // Camera Ref
+  const fileInputRef = useRef(null);
 
   // Dados do Usuário
   const [user, setUser] = useState({
@@ -419,18 +439,40 @@ export default function App() {
     setLoadingAI(false);
   };
 
-  const handlePhotoUpload = () => {
-    const newMsgs = [...chatMessages, { sender: 'user', text: "📸 [Foto enviada para análise]" }];
-    setChatMessages(newMsgs);
-    setLoadingAI(true);
-    setTimeout(async () => {
+  // Handler para clicar no botão da câmera e abrir o seletor de arquivo
+  const triggerCamera = () => {
+    if (fileInputRef.current) {
+        fileInputRef.current.click();
+    }
+  };
+
+  // Handler para processar a foto selecionada
+  const handleFileSelect = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+        // 1. Mostrar prévia no chat
+        const base64Full = reader.result;
+        const newMsgs = [...chatMessages, { sender: 'user', text: "📸 [Foto Enviada]", image: base64Full }];
+        setChatMessages(newMsgs);
+        setLoadingAI(true);
+
+        // 2. Preparar Base64 puro para a API (sem o header data:image/...)
+        const base64Raw = base64Full.split(',')[1];
+
+        // 3. Chamar o Gemini com a Imagem
         const aiResponse = await callGemini(
-            `A Raylany enviou uma foto de um prato de comida ou do corpo dela. Reaja de forma motivadora ou dê uma bronca leve se parecer "gordice".`, 
-            NUTRI_SYSTEM_PROMPT
+            "Analise esta imagem que a Raylany enviou. É comida? É o corpo dela? Seja a nutricionista engraçada e dê sua opinião.",
+            NUTRI_SYSTEM_PROMPT,
+            base64Raw
         );
+
         setChatMessages(prev => [...prev, { sender: 'nutri', text: aiResponse }]);
         setLoadingAI(false);
-    }, 1500);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleGenerateRecipe = async () => {
@@ -737,11 +779,14 @@ export default function App() {
         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
             {chatMessages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] p-3 rounded-2xl text-sm whitespace-pre-wrap ${
+                    <div className={`max-w-[85%] p-3 rounded-2xl text-sm whitespace-pre-wrap flex flex-col gap-2 ${
                         msg.sender === 'user' 
                         ? 'bg-purple-500 text-white rounded-tr-none' 
                         : 'bg-white border border-gray-200 text-gray-700 rounded-tl-none shadow-sm'
                     }`}>
+                        {msg.image && (
+                            <img src={msg.image} alt="Foto enviada" className="rounded-lg w-full h-auto max-h-40 object-cover" />
+                        )}
                         {msg.text}
                     </div>
                 </div>
@@ -757,10 +802,21 @@ export default function App() {
         </div>
 
         <div className="p-3 bg-white border-t border-gray-100 flex gap-2">
+            {/* INPUT DE ARQUIVO OCULTO */}
+            <input 
+                type="file" 
+                accept="image/*" 
+                capture="environment"
+                ref={fileInputRef}
+                className="hidden"
+                onChange={handleFileSelect}
+            />
+            
             <button 
-                onClick={handlePhotoUpload}
+                onClick={triggerCamera}
                 className="bg-gray-100 text-gray-500 w-10 h-10 rounded-full flex items-center justify-center hover:bg-gray-200 transition"
                 title="Enviar Foto"
+                disabled={loadingAI}
             >
                 <Camera className="w-5 h-5" />
             </button>
